@@ -1,15 +1,173 @@
-= Endpoint Callout policy
+= Endpoint callout policy
+
+ifdef::env-github[]
+image:https://img.shields.io/static/v1?label=Available%20at&message=Gravitee.io&color=1EC9D2["Gravitee.io", link="https://download.gravitee.io/#graviteeio-apim/plugins/policies/gravitee-policy-endpoint-callout/"]
+image:https://img.shields.io/badge/License-Apache%202.0-blue.svg["License", link="https://github.com/gravitee-io/gravitee-policy-endpoint-callout/blob/master/LICENSE.txt"]
+image:https://img.shields.io/badge/semantic--release-conventional%20commits-e10079?logo=semantic-release["Releases", link="https://github.com/gravitee-io/gravitee-policy-endpoint-callout/releases"]
+image:https://circleci.com/gh/gravitee-io/gravitee-policy-endpoint-callout.svg?style=svg["CircleCI", link="https://circleci.com/gh/gravitee-io/gravitee-policy-endpoint-callout"]
+endif::[]
 
 == Phase
 
-[cols="^2,^2,^2,^2",options="header"]
+[cols="4*", options="header"]
 |===
-|onRequest|onResponse|onRequestContent|onResponseContent
+^|onRequest
+^|onResponse
+^|onRequestContent
+^|onResponseContent
 
-|X
-|X
-|X
-|X
+^.^| X
+^.^| X
+^.^| X
+^.^| X
 
 |===
 
+== Description
+
+You can use the `endpoint-callout` policy to invoke any of the endpoints declared within the API definition, whatever
+the type of the endpoint is. This provides more capabilities than the `callout-http` policy which can be used only for
+HTTP purpose (HTTP endpoint).
+
+Thanks to the `endpoint-callout`, you can now do callout to a Kafka or an HTTP endpoint without knowing by advance
+what's the exact type of the targeted endpoint.
+
+As with the `callout-http`, you can look into the response from the invoked endpoint for playing with the response from
+that one. One of the typical usage is to read the response's payload (or a part of) and push it into one of the request
+execution context variable.
+
+This can be useful if you need some data from an external service and want to inject it during request
+processing.
+
+The result of the callout is placed in a variable called `calloutResponse` and is only available during policy
+execution. If no variable is configured the result of the callout is no longer available.
+
+== Compatibility with APIM
+
+|===
+|Plugin version | APIM version
+
+|1.x and upper                  | 3.18.x to latest
+|===
+
+== Configuration
+
+|===
+|Property |Required |Description |Type |Default
+
+.^|method
+^.^|X
+|HTTP Method used to invoke URL
+^.^|HTTP method
+^.^|GET
+
+.^|useSystemProxy
+^.^|X
+|Use the system proxy configured by your administrator
+^.^|boolean
+^.^|false
+
+.^|url
+^.^|X
+|Endpoint invoked by the gateway (support EL)
+^.^|URL
+^.^|-
+
+.^|headers
+^.^|X
+|List of HTTP headers used to invoke the endpoint (support EL)
+^.^|HTTP Headers
+^.^|-
+
+.^|body
+^.^|X
+|The body content send when calling the endpoint (support EL)
+^.^|string
+^.^|-
+
+.^|fireAndForget
+^.^|X
+|Make the endpoint invocation without expecting any response. When activating this mode, context variables and exit on error are useless.
+^.^|boolean
+^.^|false
+
+.^|variables
+^.^|X
+|The variables to set in the execution context when retrieving content of endpoint call (support EL)
+^.^|List of variables
+^.^|-
+
+.^|exitOnError
+^.^|X
+|Terminate the request if the error condition is true
+^.^|boolean
+^.^|false
+
+.^|errorCondition
+^.^|X
+|The condition which will be verified to end the request (support EL)
+^.^|string
+^.^|{#calloutResponse.status >= 400 and #calloutResponse.status <= 599}
+
+.^|errorStatusCode
+^.^|X
+|HTTP Status Code sent to the consumer if the condition is true
+^.^|int
+^.^|500
+
+.^|errorContent
+^.^|X
+|The body response of the error if the condition is true (support EL)
+^.^|string
+^.^|-
+
+|===
+
+== Examples
+
+[source, json]
+----
+"policy-endpoint-callout": {
+    "method": "GET",
+    "url": "{#endpoints['kafka']/my-topic",
+    "headers": [ {
+        "name": "X-Gravitee-Request-Id",
+        "value": "{#request.id}"
+    }],
+    "variables": [{
+        "name": "my-server",
+        "value": "{#jsonPath(#calloutResponse.content, '$.headers.X-Forwarded-Server')}"
+    }]
+}
+----
+
+== Errors
+
+=== Default error
+
+|===
+|Code |Message
+
+.^| ```500```
+| An error occurred while invoking URL
+
+|===
+
+=== Override errors
+
+You can override the default response provided by the policy with the response templates feature. These templates must be defined at the API level with the APIM Console *Proxy > Response Templates* function.
+
+The error keys sent by this policy are as follows:
+
+[cols="2*", options="header"]
+|===
+^|Key
+^|Parameters
+
+.^|ENDPOINT_CALLOUT_EXIT_ON_ERROR
+^.^|-
+
+.^|ENDPOINT_CALLOUT_ERROR
+^.^|-
+
+|===

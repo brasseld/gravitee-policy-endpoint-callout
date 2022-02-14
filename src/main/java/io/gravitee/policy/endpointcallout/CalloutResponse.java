@@ -15,7 +15,7 @@
  */
 package io.gravitee.policy.endpointcallout;
 
-import io.gravitee.common.http.HttpHeaders;
+import io.gravitee.gateway.api.http.HttpHeaders;
 import io.gravitee.gateway.api.proxy.ProxyResponse;
 
 /**
@@ -35,9 +35,7 @@ public class CalloutResponse {
   CalloutResponse(final ProxyResponse response, final String content) {
     this.response = response;
     this.content = content;
-    this.headers = new HttpHeaders(response.headers().size());
-
-    response.headers().forEach(headers::put);
+    this.headers = HttpHeaders.create(response.headers());
   }
 
   public int getStatus() {

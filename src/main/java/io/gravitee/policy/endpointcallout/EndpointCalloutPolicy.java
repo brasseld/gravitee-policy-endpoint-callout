@@ -24,11 +24,9 @@ import io.gravitee.gateway.api.el.EvaluableRequest;
 import io.gravitee.gateway.api.el.EvaluableResponse;
 import io.gravitee.gateway.api.endpoint.resolver.EndpointResolver;
 import io.gravitee.gateway.api.endpoint.resolver.ProxyEndpoint;
-import io.gravitee.gateway.api.handler.Handler;
-import io.gravitee.gateway.api.proxy.ProxyConnection;
+import io.gravitee.gateway.api.http.HttpHeaders;
 import io.gravitee.gateway.api.proxy.ProxyRequest;
 import io.gravitee.gateway.api.proxy.ProxyResponse;
-import io.gravitee.gateway.api.proxy.builder.ProxyRequestBuilder;
 import io.gravitee.gateway.api.stream.BufferedReadWriteStream;
 import io.gravitee.gateway.api.stream.ReadWriteStream;
 import io.gravitee.gateway.api.stream.SimpleReadWriteStream;
@@ -41,7 +39,6 @@ import io.gravitee.policy.api.annotations.OnResponseContent;
 import io.gravitee.policy.endpointcallout.configuration.EndpointCalloutPolicyConfiguration;
 import io.gravitee.policy.endpointcallout.configuration.PolicyScope;
 import java.util.function.Consumer;
-import java.util.function.Function;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -160,23 +157,25 @@ public class EndpointCalloutPolicy {
             .getValue(configuration.getBody(), String.class);
       }
 
-      // Check the resolved body before trying to send it.
-      //if (body != null && !body.isEmpty()) {
-      //    httpClientRequest.headers().remove(HttpHeaders.TRANSFER_ENCODING);
-      //    httpClientRequest.putHeader(HttpHeaders.CONTENT_LENGTH, Integer.toString(body.length()));
-      //}
-
       ProxyRequest proxyRequest = endpoint.createProxyRequest(
         context.request(),
-        new Function<ProxyRequestBuilder, ProxyRequestBuilder>() {
-          @Override
-          public ProxyRequestBuilder apply(ProxyRequestBuilder builder) {
-            builder.method(configuration.getMethod());
-            builder.uri(target);
-            // TODO: handle headers
-
-            return builder;
+        builder -> {
+          HttpHeaders headers = HttpHeaders.create();
+          if (
+            configuration.getHeaders() != null &&
+            !configuration.getHeaders().isEmpty()
+          ) {
+            configuration
+              .getHeaders()
+              .forEach(httpHeader ->
+                headers.add(httpHeader.getName(), httpHeader.getValue())
+              );
           }
+
+          return builder
+            .method(configuration.getMethod())
+            .uri(target)
+            .headers(headers);
         }
       );
 
@@ -186,105 +185,35 @@ public class EndpointCalloutPolicy {
         .request(
           proxyRequest,
           context,
-          new Handler<ProxyConnection>() {
-            @Override
-            public void handle(ProxyConnection connection) {
-              if (connection != null) {
-                if (finalBody != null && !finalBody.isEmpty()) {
-                  connection.end(Buffer.buffer(finalBody));
-                } else {
-                  connection.end();
-                }
-
-                connection.exceptionHandler(
-                  new Handler<Throwable>() {
-                    @Override
-                    public void handle(Throwable throwable) {
-                      handleFailure(
-                        onSuccessCallback,
-                        onErrorCallback,
-                        throwable
-                      );
-                    }
-                  }
-                );
-
-                connection.responseHandler(
-                  new Handler<ProxyResponse>() {
-                    @Override
-                    public void handle(ProxyResponse proxyResponse) {
-                      handleSuccess(
-                        context,
-                        onSuccessCallback,
-                        onErrorCallback,
-                        proxyResponse
-                      );
-                    }
-                  }
-                );
+          connection -> {
+            if (connection != null) {
+              if (finalBody != null && !finalBody.isEmpty()) {
+                connection.end(Buffer.buffer(finalBody));
               } else {
-                handleFailure(
+                connection.end();
+              }
+
+              connection.exceptionHandler(throwable ->
+                handleFailure(onSuccessCallback, onErrorCallback, throwable)
+              );
+
+              connection.responseHandler(proxyResponse ->
+                handleSuccess(
+                  context,
                   onSuccessCallback,
                   onErrorCallback,
-                  new Exception()
-                );
-              }
+                  proxyResponse
+                )
+              );
+            } else {
+              handleFailure(
+                onSuccessCallback,
+                onErrorCallback,
+                new Exception()
+              );
             }
           }
         );
-      /*
-
-            HttpClient httpClient = vertx.createHttpClient(options);
-
-            RequestOptions requestOpts = new RequestOptions()
-                    .setAbsoluteURI(url)
-                    .setMethod(convert(configuration.getMethod()));
-
-            final Future<HttpClientRequest> futureRequest = httpClient.request(requestOpts);
-
-            futureRequest.onFailure(throwable -> handleFailure(onSuccessCallback, onErrorCallback, httpClient, throwable));
-
-            futureRequest.onSuccess(httpClientRequest -> {
-                // Connection is made, lets continue.
-                final Future<HttpClientResponse> futureResponse;
-
-                if (configuration.getHeaders() != null) {
-                    configuration.getHeaders().forEach(header -> {
-                        try {
-                            String extValue = (header.getValue() != null) ?
-                                    context.getTemplateEngine().convert(header.getValue()) : null;
-                            if (extValue != null) {
-                                httpClientRequest.putHeader(header.getName(), extValue);
-                            }
-                        } catch (Exception ex) {
-                            // Do nothing
-                        }
-                    });
-                }
-
-                String body = null;
-
-                if (configuration.getBody() != null && !configuration.getBody().isEmpty()) {
-                    // Body can be dynamically resolved using el expression.
-                    body = context.getTemplateEngine()
-                            .getValue(configuration.getBody(), String.class);
-                }
-
-                // Check the resolved body before trying to send it.
-                if(body != null && !body.isEmpty()) {
-                    httpClientRequest.headers().remove(HttpHeaders.TRANSFER_ENCODING);
-                    httpClientRequest.putHeader(HttpHeaders.CONTENT_LENGTH, Integer.toString(body.length()));
-                    futureResponse = httpClientRequest.send(io.vertx.core.buffer.Buffer.buffer(body));
-                } else {
-                    futureResponse = httpClientRequest.send();
-                }
-
-                futureResponse
-                        .onSuccess(httpResponse -> handleSuccess(context, onSuccessCallback, onErrorCallback, httpClient, httpResponse))
-                        .onFailure(throwable -> handleFailure(onSuccessCallback, onErrorCallback, httpClient, throwable));
-            });
-             */
-
     } catch (Exception ex) {
       onErrorCallback.accept(
         PolicyResult.failure(
@@ -301,84 +230,77 @@ public class EndpointCalloutPolicy {
     Consumer<PolicyResult> onError,
     ProxyResponse proxyResponse
   ) {
-    proxyResponse.bodyHandler(
-      body -> {
-        TemplateEngine tplEngine = context.getTemplateEngine();
+    proxyResponse.bodyHandler(body -> {
+      TemplateEngine tplEngine = context.getTemplateEngine();
 
-        // Put response into template variable for EL
-        final CalloutResponse calloutResponse = new CalloutResponse(
-          proxyResponse,
-          body.toString()
-        );
+      // Put response into template variable for EL
+      final CalloutResponse calloutResponse = new CalloutResponse(
+        proxyResponse,
+        body.toString()
+      );
 
-        if (!configuration.isFireAndForget()) {
-          // Variables and exit on error are only managed if the fire & forget is disabled.
-          tplEngine
-            .getTemplateContext()
-            .setVariable(TEMPLATE_VARIABLE, calloutResponse);
+      if (!configuration.isFireAndForget()) {
+        // Variables and exit on error are only managed if the fire & forget is disabled.
+        tplEngine
+          .getTemplateContext()
+          .setVariable(TEMPLATE_VARIABLE, calloutResponse);
 
-          // Process callout response
-          boolean exit = false;
+        // Process callout response
+        boolean exit = false;
 
-          if (configuration.isExitOnError()) {
-            exit =
-              tplEngine.getValue(
-                configuration.getErrorCondition(),
-                Boolean.class
-              );
-          }
-
-          if (!exit) {
-            // Set context variables
-            if (configuration.getVariables() != null) {
-              configuration
-                .getVariables()
-                .forEach(
-                  variable -> {
-                    try {
-                      String extValue = (variable.getValue() != null)
-                        ? tplEngine.getValue(variable.getValue(), String.class)
-                        : null;
-
-                      context.setAttribute(variable.getName(), extValue);
-                    } catch (Exception ex) {
-                      // Do nothing
-                    }
-                  }
-                );
-            }
-
-            tplEngine.getTemplateContext().setVariable(TEMPLATE_VARIABLE, null);
-
-            // Finally continue chaining
-            onSuccess.accept(null);
-          } else {
-            String errorContent = configuration.getErrorContent();
-            try {
-              errorContent =
-                tplEngine.getValue(
-                  configuration.getErrorContent(),
-                  String.class
-                );
-            } catch (Exception ex) {
-              // Do nothing
-            }
-
-            if (errorContent == null || errorContent.isEmpty()) {
-              errorContent = "Request is terminated.";
-            }
-
-            onError.accept(
-              PolicyResult.failure(
-                ENDPOINT_CALLOUT_EXIT_ON_ERROR,
-                configuration.getErrorStatusCode(),
-                errorContent
-              )
+        if (configuration.isExitOnError()) {
+          exit =
+            tplEngine.getValue(
+              configuration.getErrorCondition(),
+              Boolean.class
             );
+        }
+
+        if (!exit) {
+          // Set context variables
+          if (configuration.getVariables() != null) {
+            configuration
+              .getVariables()
+              .forEach(variable -> {
+                try {
+                  String extValue = (variable.getValue() != null)
+                    ? tplEngine.getValue(variable.getValue(), String.class)
+                    : null;
+
+                  context.setAttribute(variable.getName(), extValue);
+                } catch (Exception ex) {
+                  // Do nothing
+                }
+              });
           }
+
+          tplEngine.getTemplateContext().setVariable(TEMPLATE_VARIABLE, null);
+
+          // Finally continue chaining
+          onSuccess.accept(null);
+        } else {
+          String errorContent = configuration.getErrorContent();
+          try {
+            errorContent =
+              tplEngine.getValue(configuration.getErrorContent(), String.class);
+          } catch (Exception ex) {
+            // Do nothing
+          }
+
+          if (errorContent == null || errorContent.isEmpty()) {
+            errorContent = "Request is terminated.";
+          }
+
+          onError.accept(
+            PolicyResult.failure(
+              ENDPOINT_CALLOUT_EXIT_ON_ERROR,
+              configuration.getErrorStatusCode(),
+              errorContent
+            )
+          );
         }
       }
-    );
+    });
   }
 
   private void handleFailure(
