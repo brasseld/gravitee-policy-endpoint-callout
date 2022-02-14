@@ -1,0 +1,15 @@
+= Endpoint Callout policy
+
+== Phase
+
+[cols="^2,^2,^2,^2",options="header"]
+|===
+|onRequest|onResponse|onRequestContent|onResponseContent
+
+|X
+|X
+|X
+|X
+
+|===
+
